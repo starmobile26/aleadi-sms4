@@ -29,6 +29,7 @@ import {
   Sparkles,
   X,
   ArrowUpRight,
+  Trash2,
 } from "lucide-react";
 
 /* ================================================================
@@ -283,6 +284,7 @@ export default function Home() {
   const [testSending, setTestSending] = useState(false);
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [togglingMaintenance, setTogglingMaintenance] = useState(false);
+  const [clearingMessages, setClearingMessages] = useState(false);
 
   /* Auth check */
   useEffect(() => {
@@ -461,6 +463,32 @@ export default function Home() {
     }
   }
 
+  async function clearMessages() {
+    if (!window.confirm("سيتم حذف جميع الرسائل من قاعدة بيانات Firebase نهائيًا. هل تريد المتابعة؟")) {
+      return;
+    }
+
+    setClearingMessages(true);
+    try {
+      const res = await fetch("/api/messages/clear", {
+        method: "DELETE",
+        headers: { "x-api-key": API_KEY },
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "تعذر تنظيف الرسائل");
+      }
+
+      await loadMessages(true);
+      alert(`تم حذف ${data.deleted} رسالة بنجاح`);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "تعذر تنظيف الرسائل");
+    } finally {
+      setClearingMessages(false);
+    }
+  }
+
   /* Logout */
   function logout() {
     localStorage.removeItem("alwadi_logged_in");
@@ -621,6 +649,22 @@ export default function Home() {
           >
             <Send size={16} />
             <span className="hide-on-mobile">إرسال تجريبي</span>
+          </button>
+
+          <button
+            onClick={clearMessages}
+            disabled={clearingMessages}
+            className="btn-fintech-primary"
+            title="حذف جميع الرسائل من Firebase"
+            style={{
+              padding: "10px 16px",
+              fontSize: "0.88rem",
+              color: "var(--danger-text)",
+              borderColor: "var(--danger)",
+            }}
+          >
+            {clearingMessages ? <RefreshCw size={16} className="spin-anim" /> : <Trash2 size={16} />}
+            <span className="hide-on-mobile">تنظيف الرسائل</span>
           </button>
 
           <button
