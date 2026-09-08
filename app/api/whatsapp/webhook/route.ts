@@ -2,6 +2,8 @@ import { getDb } from "@/lib/firebase-admin";
 import { NextResponse } from "next/server";
 
 const COMMAND = "ارسل رمز التحقق الخاص بي";
+const TEST_PHONE = "15550263760";
+const TEST_REPLY = "مرحبا بك نظام ستار موبايل يعمل ------ تمام";
 const GRAPH_API_VERSION = "v22.0";
 
 type WhatsAppTextMessage = {
@@ -150,6 +152,14 @@ async function handleIncomingMessage(message: WhatsAppTextMessage): Promise<void
     from: customerNumber,
     messageId: message.id,
   });
+
+  if (normalizeDigits(customerNumber).replace(/\D/g, "") === TEST_PHONE) {
+    await sendWhatsAppText(customerNumber, TEST_REPLY);
+    console.log("WhatsApp webhook: test reply sent", {
+      to: customerNumber,
+    });
+    return;
+  }
 
   if (text !== COMMAND) {
     return;
