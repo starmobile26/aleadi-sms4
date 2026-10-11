@@ -1,6 +1,6 @@
 import { getDb } from "@/lib/firebase-admin";
 import { serverState, isReaderConnected } from "@/lib/server-state";
-import { getOrInitStats, updateStatsOnStatusChange, normalizeStatus } from "@/lib/stats-service";
+import { getOrInitStats, updateStatsOnStatusChange, recalculateAndSaveStats, normalizeStatus } from "@/lib/stats-service";
 import { NextResponse } from "next/server";
 
 type Message = {
@@ -27,7 +27,24 @@ export async function GET(request: Request) {
     // =====================================================
     // 2. قراءة مستند الإحصائيات الشاملة (قراءة واحدة فقط 1 Read)
     // =====================================================
-    const statsData = await getOrInitStats(db);
+    let statsData = await getOrInitStats(db);
+
+    // =====================================================
+    // 2.5. التحقق والتصحيح التلقائي الذاتي في حال وجود رقم انتظار وهمي
+    // =====================================================
+    if (statsData.pending > 0) {
+      const pendingCheck = await db
+        .collection("messages")
+        .where("status", "==", "pending")
+        .limit(1)
+        .get();
+
+      if (pendingCheck.empty) {
+        // لا توجد أي رسائل معلقة فعلياً في القاعدة!
+        // إعادة حساب دقيقة لمرة واحدة لفرز الحالات الأصلية (تم التسليم / فشل) وتصحيح الإحصائيات تلقائياً
+        statsData = await recalculateAndSaveStats(db);
+      }
+    }
 
     // =====================================================
     // 3. جلب آخر 10 رسائل فقط للعرض (10 قراءات فقط 10 Reads)
