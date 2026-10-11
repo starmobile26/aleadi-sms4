@@ -24,11 +24,46 @@ const STATS_DOC_ID = "stats";
  */
 export function normalizeStatus(status?: string | null): string {
   if (!status) return "pending";
-  const s = String(status).trim().toLowerCase().replace("-", "_");
-  if (s === "sent" || s === "success" || s === "delivered") return "delivered";
-  if (s === "balance_failed" || s === "failed_balance" || s === "insufficient_balance") return "failed_balance";
-  if (s === "failed" || s === "error" || s === "fail") return "failed";
-  if (s === "pending" || s === "wait" || s === "waiting") return "pending";
+  const s = String(status).trim().toLowerCase().replace(/-/g, "_");
+  if (
+    s.includes("balance") ||
+    s.includes("رصيد") ||
+    s === "failed_balance" ||
+    s === "balance_failed" ||
+    s === "insufficient_balance"
+  ) {
+    return "failed_balance";
+  }
+  if (
+    s === "sent" ||
+    s === "success" ||
+    s === "delivered" ||
+    s.includes("deliver") ||
+    s.includes("succes") ||
+    s.includes("نجاح") ||
+    s.includes("تم")
+  ) {
+    return "delivered";
+  }
+  if (
+    s === "failed" ||
+    s === "error" ||
+    s === "fail" ||
+    s.includes("fail") ||
+    s.includes("خطأ") ||
+    s.includes("فشل")
+  ) {
+    return "failed";
+  }
+  if (
+    s === "pending" ||
+    s === "wait" ||
+    s === "waiting" ||
+    s.includes("pend") ||
+    s.includes("انتظار")
+  ) {
+    return "pending";
+  }
   return s;
 }
 
@@ -73,7 +108,8 @@ export async function recalculateAndSaveStats(db: FirebaseFirestore.Firestore): 
   snapshot.docs.forEach((doc) => {
     const data = doc.data();
     const status = normalizeStatus(data.status || "pending");
-    const createdAt = Number(data.createdAt || Date.now());
+    const rawCreatedAt = Number(data.createdAt);
+    const createdAt = !isNaN(rawCreatedAt) && rawCreatedAt > 0 ? rawCreatedAt : Date.now();
     const dateKey = new Date(createdAt).toISOString().split("T")[0];
 
     total++;
@@ -113,19 +149,20 @@ export async function recalculateAndSaveStats(db: FirebaseFirestore.Firestore): 
 }
 
 /**
- * تحديث الإحصائيات عند إنشاء رسالة جديدة (زيادة العدادات بأمان ذري عبر transaction لتجنب أخطاء dot notation)
+ * تحديث الإحصائيات عند إنشاء رسالة جديدة (زيادة العدادات بأمان ذري عبر transaction)
  */
 export async function incrementStatsOnNewMessage(
   db: FirebaseFirestore.Firestore,
   createdAt: number
 ): Promise<DashboardStats> {
-  const dateKey = new Date(createdAt).toISOString().split("T")[0];
+  const validCreatedAt = typeof createdAt === "number" && !isNaN(createdAt) && createdAt > 0 ? createdAt : Date.now();
+  const dateKey = new Date(validCreatedAt).toISOString().split("T")[0];
   const statsRef = db.collection(SETTINGS_COLLECTION).doc(STATS_DOC_ID);
 
   return await db.runTransaction(async (transaction) => {
     const docSnap = await transaction.get(statsRef);
-    let total = 1;
-    let pending = 1;
+    let total = 0;
+    let pending = 0;
     let delivered = 0;
     let failed = 0;
     let failedBalance = 0;
@@ -133,13 +170,16 @@ export async function incrementStatsOnNewMessage(
 
     if (docSnap.exists) {
       const data = docSnap.data();
-      total = Math.max(0, Number(data?.total ?? 0)) + 1;
-      pending = Math.max(0, Number(data?.pending ?? 0)) + 1;
+      total = Math.max(0, Number(data?.total ?? 0));
+      pending = Math.max(0, Number(data?.pending ?? 0));
       delivered = Math.max(0, Number(data?.delivered ?? 0));
       failed = Math.max(0, Number(data?.failed ?? 0));
       failedBalance = Math.max(0, Number(data?.failedBalance ?? 0));
       daily = (data?.daily as Record<string, DailyStats>) || {};
     }
+
+    total += 1;
+    pending += 1;
 
     const currentDay = daily[dateKey] || { total: 0, delivered: 0, pending: 0, failed: 0, failedBalance: 0 };
     daily[dateKey] = {
@@ -157,7 +197,7 @@ export async function incrementStatsOnNewMessage(
       failed,
       failedBalance,
       daily,
-      updatedAt: createdAt,
+      updatedAt: validCreatedAt,
     };
 
     transaction.set(statsRef, stats);
@@ -182,22 +222,28 @@ export async function updateStatsOnStatusChange(
     return await getOrInitStats(db);
   }
 
-  const dateKey = new Date(createdAt).toISOString().split("T")[0];
+  const validCreatedAt = typeof createdAt === "number" && !isNaN(createdAt) && createdAt > 0 ? createdAt : Date.now();
+  const dateKey = new Date(validCreatedAt).toISOString().split("T")[0];
   const statsRef = db.collection(SETTINGS_COLLECTION).doc(STATS_DOC_ID);
 
   return await db.runTransaction(async (transaction) => {
     const docSnap = await transaction.get(statsRef);
-    if (!docSnap.exists) {
-      return await recalculateAndSaveStats(db);
-    }
+    let total = 0;
+    let pending = 0;
+    let delivered = 0;
+    let failed = 0;
+    let failedBalance = 0;
+    let daily: Record<string, DailyStats> = {};
 
-    const data = docSnap.data();
-    let total = Math.max(0, Number(data?.total ?? 0));
-    let pending = Math.max(0, Number(data?.pending ?? 0));
-    let delivered = Math.max(0, Number(data?.delivered ?? 0));
-    let failed = Math.max(0, Number(data?.failed ?? 0));
-    let failedBalance = Math.max(0, Number(data?.failedBalance ?? 0));
-    const daily: Record<string, DailyStats> = (data?.daily as Record<string, DailyStats>) || {};
+    if (docSnap.exists) {
+      const data = docSnap.data();
+      total = Math.max(0, Number(data?.total ?? 0));
+      pending = Math.max(0, Number(data?.pending ?? 0));
+      delivered = Math.max(0, Number(data?.delivered ?? 0));
+      failed = Math.max(0, Number(data?.failed ?? 0));
+      failedBalance = Math.max(0, Number(data?.failedBalance ?? 0));
+      daily = (data?.daily as Record<string, DailyStats>) || {};
+    }
 
     const currentDay = {
       total: daily[dateKey]?.total ?? 0,
@@ -236,6 +282,10 @@ export async function updateStatsOnStatusChange(
       failedBalance++;
       currentDay.failedBalance++;
     }
+
+    // ضمان اتساق الإجمالي
+    total = Math.max(total, pending + delivered + failed + failedBalance);
+    currentDay.total = Math.max(currentDay.total || 0, currentDay.pending + currentDay.delivered + currentDay.failed + currentDay.failedBalance);
 
     daily[dateKey] = currentDay;
 

@@ -1,6 +1,6 @@
 import { getDb } from "@/lib/firebase-admin";
 import { serverState, isReaderConnected } from "@/lib/server-state";
-import { getOrInitStats, updateStatsOnStatusChange } from "@/lib/stats-service";
+import { getOrInitStats, updateStatsOnStatusChange, normalizeStatus } from "@/lib/stats-service";
 import { NextResponse } from "next/server";
 
 type Message = {
@@ -44,8 +44,8 @@ export async function GET(request: Request) {
     const statusChanges: Array<{ oldStatus: string; newStatus: string; createdAt: number }> = [];
 
     const messages: Message[] = snapshot.docs.map((doc) => {
-      let status = doc.data().status;
-      const createdAt = doc.data().createdAt;
+      let status = normalizeStatus(doc.data().status);
+      const createdAt = Number(doc.data().createdAt || now);
       
       // إذا كانت الرسالة معلقة وتجاوزت 7 دقائق، تحول لفاشلة
       if (status === "pending" && now - createdAt > 7 * 60 * 1000) {
@@ -57,8 +57,8 @@ export async function GET(request: Request) {
 
       return {
         id: doc.id,
-        phone: doc.data().phone,
-        message: doc.data().message,
+        phone: String(doc.data().phone || ""),
+        message: String(doc.data().message || ""),
         createdAt,
         status,
         deliveredAt: doc.data().deliveredAt ?? undefined,

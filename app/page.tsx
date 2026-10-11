@@ -30,7 +30,6 @@ import {
   X,
   ArrowUpRight,
   Trash2,
-  BarChart3,
   AlertCircle,
 } from "lucide-react";
 
@@ -287,7 +286,6 @@ export default function Home() {
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [togglingMaintenance, setTogglingMaintenance] = useState(false);
   const [clearingMessages, setClearingMessages] = useState(false);
-  const [syncingStats, setSyncingStats] = useState(false);
 
   /* Auth check */
   useEffect(() => {
@@ -318,40 +316,6 @@ export default function Home() {
     } finally {
       setLoading(false);
       setRefreshing(false);
-    }
-  }, []);
-
-  /* Sync & Recalculate Stats directly from Firebase */
-  const syncStats = useCallback(async () => {
-    setSyncingStats(true);
-    try {
-      const res = await fetch("/api/messages/stats/recalculate", { method: "POST" });
-      if (res.ok) {
-        const result = await res.json();
-        if (result.success && result.stats) {
-          setData((prev) => {
-            if (!prev) return prev;
-            const total = Math.max(0, result.stats.total || 0);
-            const delivered = Math.max(0, result.stats.delivered || 0);
-            return {
-              ...prev,
-              stats: {
-                ...prev.stats,
-                total,
-                pending: Math.max(0, result.stats.pending || 0),
-                delivered,
-                failed: Math.max(0, result.stats.failed || 0),
-                failedBalance: Math.max(0, result.stats.failedBalance || 0),
-                successRate: total > 0 ? Math.round((delivered / total) * 100) : 0,
-              },
-            };
-          });
-        }
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setSyncingStats(false);
     }
   }, []);
 
@@ -763,17 +727,6 @@ export default function Home() {
           >
             {clearingMessages ? <RefreshCw size={16} className="spin-anim" /> : <Trash2 size={16} />}
             <span className="hide-on-mobile">تنظيف الرسائل</span>
-          </button>
-
-          <button
-            onClick={() => syncStats()}
-            disabled={syncingStats}
-            className="btn-fintech-primary"
-            title="مزامنة وإعادة حساب الإحصائيات مع قاعدة البيانات"
-            style={{ padding: "10px 16px", fontSize: "0.88rem" }}
-          >
-            {syncingStats ? <RefreshCw size={16} className="spin-anim" /> : <BarChart3 size={16} />}
-            <span className="hide-on-mobile">مزامنة الإحصائيات</span>
           </button>
 
           <button

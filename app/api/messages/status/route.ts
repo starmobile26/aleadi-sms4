@@ -6,17 +6,20 @@ import { updateStatsOnStatusChange, normalizeStatus } from "@/lib/stats-service"
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    let { id, status } = body;
+    const rawId = body.id || body.messageId || body._id;
+    const { status } = body;
 
-    if (!id || !status) {
+    if (!rawId || !status) {
       return NextResponse.json({ success: false, error: "Missing id or status" }, { status: 400 });
     }
 
+    const id = String(rawId).trim();
     const normalizedStatus = normalizeStatus(status);
     if (
       normalizedStatus !== "delivered" &&
       normalizedStatus !== "failed" &&
-      normalizedStatus !== "failed_balance"
+      normalizedStatus !== "failed_balance" &&
+      normalizedStatus !== "pending"
     ) {
       return NextResponse.json({ success: false, error: "Invalid status" }, { status: 400 });
     }
