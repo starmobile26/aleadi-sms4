@@ -30,6 +30,8 @@ import {
   X,
   ArrowUpRight,
   Trash2,
+  BarChart3,
+  AlertCircle,
 } from "lucide-react";
 
 /* ================================================================
@@ -41,7 +43,7 @@ type Message = {
   phone: string;
   message: string;
   createdAt: number;
-  status: "pending" | "delivered" | "failed";
+  status: "pending" | "delivered" | "failed" | "failed_balance";
   deliveredAt?: number;
 };
 
@@ -274,7 +276,7 @@ export default function Home() {
   const [data, setData] = useState<HistoryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "delivered" | "failed">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "delivered" | "failed" | "failed_balance">("all");
   const [copiedApi, setCopiedApi] = useState(false);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -285,6 +287,7 @@ export default function Home() {
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [togglingMaintenance, setTogglingMaintenance] = useState(false);
   const [clearingMessages, setClearingMessages] = useState(false);
+  const [syncingStats, setSyncingStats] = useState(false);
 
   /* Auth check */
   useEffect(() => {
@@ -318,6 +321,40 @@ export default function Home() {
     }
   }, []);
 
+  /* Sync & Recalculate Stats directly from Firebase */
+  const syncStats = useCallback(async () => {
+    setSyncingStats(true);
+    try {
+      const res = await fetch("/api/messages/stats/recalculate", { method: "POST" });
+      if (res.ok) {
+        const result = await res.json();
+        if (result.success && result.stats) {
+          setData((prev) => {
+            if (!prev) return prev;
+            const total = Math.max(0, result.stats.total || 0);
+            const delivered = Math.max(0, result.stats.delivered || 0);
+            return {
+              ...prev,
+              stats: {
+                ...prev.stats,
+                total,
+                pending: Math.max(0, result.stats.pending || 0),
+                delivered,
+                failed: Math.max(0, result.stats.failed || 0),
+                failedBalance: Math.max(0, result.stats.failedBalance || 0),
+                successRate: total > 0 ? Math.round((delivered / total) * 100) : 0,
+              },
+            };
+          });
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSyncingStats(false);
+    }
+  }, []);
+
   /* SSE Connection for Real-Time Updates */
   useEffect(() => {
     if (!loggedIn) return;
@@ -341,15 +378,16 @@ export default function Home() {
             if (prev.messages.some((item) => item.id === message.id)) return prev;
             const newTotal = prev.stats.total + 1;
             const newPending = prev.stats.pending + 1;
+            const stats = payload.stats ? { ...prev.stats, ...payload.stats } : {
+              ...prev.stats,
+              total: newTotal,
+              pending: newPending,
+              successRate: newTotal > 0 ? Math.round((prev.stats.delivered / newTotal) * 100) : 0,
+            };
             return {
               ...prev,
               messages: [message, ...prev.messages].slice(0, 10),
-              stats: {
-                ...prev.stats,
-                total: newTotal,
-                pending: newPending,
-                successRate: newTotal > 0 ? Math.round((prev.stats.delivered / newTotal) * 100) : 0,
-              },
+              stats,
             };
           });
         } else if (payload.type === "MESSAGE_UPDATED" && payload.message) {
@@ -358,6 +396,19 @@ export default function Home() {
             const msgs = prev.messages.map((m) =>
               m.id === payload.message.id ? { ...m, status: payload.message.status, deliveredAt: payload.message.deliveredAt } : m
             );
+
+            // إذا أرسل الخادم الإحصائيات المحدثة بدقة مباشرة
+            if (payload.stats) {
+              return {
+                ...prev,
+                messages: msgs,
+                stats: {
+                  ...prev.stats,
+                  ...payload.stats,
+                },
+              };
+            }
+
             const existingMsg = prev.messages.find((m) => m.id === payload.message.id);
             const oldStatus = payload.oldStatus || existingMsg?.status || "pending";
             const newStatus = payload.message.status;
@@ -433,8 +484,9 @@ export default function Home() {
     const all = data?.messages?.length ?? 0;
     const pending = data?.messages?.filter((m) => m.status === "pending").length ?? 0;
     const delivered = data?.messages?.filter((m) => m.status === "delivered").length ?? 0;
+    const failedBalance = data?.messages?.filter((m) => m.status === "failed_balance").length ?? 0;
     const failed = data?.messages?.filter((m) => m.status === "failed").length ?? 0;
-    return { all, pending, delivered, failed };
+    return { all, pending, delivered, failedBalance, failed };
   }, [data]);
 
   /* Copy API Key */
@@ -711,6 +763,17 @@ export default function Home() {
           >
             {clearingMessages ? <RefreshCw size={16} className="spin-anim" /> : <Trash2 size={16} />}
             <span className="hide-on-mobile">تنظيف الرسائل</span>
+          </button>
+
+          <button
+            onClick={() => syncStats()}
+            disabled={syncingStats}
+            className="btn-fintech-primary"
+            title="مزامنة وإعادة حساب الإحصائيات مع قاعدة البيانات"
+            style={{ padding: "10px 16px", fontSize: "0.88rem" }}
+          >
+            {syncingStats ? <RefreshCw size={16} className="spin-anim" /> : <BarChart3 size={16} />}
+            <span className="hide-on-mobile">مزامنة الإحصائيات</span>
           </button>
 
           <button
@@ -1054,9 +1117,28 @@ export default function Home() {
               gap: "4px",
             }}
           >
-            {(["all", "pending", "delivered", "failed"] as const).map((f) => {
+            {(["all", "pending", "delivered", "failed_balance", "failed"] as const).map((f) => {
               const active = statusFilter === f;
-              const count = f === "all" ? counts.all : f === "pending" ? counts.pending : f === "delivered" ? counts.delivered : counts.failed;
+              const count =
+                f === "all"
+                  ? counts.all
+                  : f === "pending"
+                  ? counts.pending
+                  : f === "delivered"
+                  ? counts.delivered
+                  : f === "failed_balance"
+                  ? counts.failedBalance
+                  : counts.failed;
+              const label =
+                f === "all"
+                  ? "الكل"
+                  : f === "pending"
+                  ? "في الانتظار"
+                  : f === "delivered"
+                  ? "المُسلّمة"
+                  : f === "failed_balance"
+                  ? "فشلت للرصيد"
+                  : "فاشلة عام";
               return (
                 <button
                   key={f}
@@ -1069,7 +1151,7 @@ export default function Home() {
                     borderRadius: "12px",
                     border: "none",
                     background: active ? "var(--surface)" : "transparent",
-                    color: active ? (f === "failed" ? "var(--danger)" : "var(--primary)") : "var(--text-sub)",
+                    color: active ? (f === "failed" || f === "failed_balance" ? "var(--danger)" : "var(--primary)") : "var(--text-sub)",
                     fontSize: "0.85rem",
                     fontWeight: active ? 700 : 500,
                     fontFamily: "inherit",
@@ -1078,12 +1160,12 @@ export default function Home() {
                     transition: "all 0.2s ease",
                   }}
                 >
-                  <span>{f === "all" ? "الكل" : f === "pending" ? "في الانتظار" : f === "delivered" ? "المُسلّمة" : "فاشلة"}</span>
+                  <span>{label}</span>
                   <span
                     className="num-latin"
                     style={{
-                      background: active ? (f === "failed" ? "var(--danger-light)" : "var(--primary-light)") : "rgba(0,0,0,0.06)",
-                      color: active ? (f === "failed" ? "var(--danger)" : "var(--primary)") : "var(--text-muted)",
+                      background: active ? (f === "failed" || f === "failed_balance" ? "var(--danger-light)" : "var(--primary-light)") : "rgba(0,0,0,0.06)",
+                      color: active ? (f === "failed" || f === "failed_balance" ? "var(--danger)" : "var(--primary)") : "var(--text-muted)",
                       padding: "2px 7px",
                       borderRadius: "var(--radius-full)",
                       fontSize: "0.72rem",
@@ -1183,8 +1265,20 @@ export default function Home() {
                         width: "44px",
                         height: "44px",
                         borderRadius: "14px",
-                        background: msg.status === "delivered" ? "var(--success-light)" : msg.status === "failed" ? "var(--danger-light)" : "var(--warning-light)",
-                        color: msg.status === "delivered" ? "var(--success-text)" : msg.status === "failed" ? "var(--danger-text)" : "var(--warning-text)",
+                        background:
+                          msg.status === "delivered"
+                            ? "var(--success-light)"
+                            : msg.status === "failed_balance"
+                            ? "rgba(239, 68, 68, 0.15)"
+                            : msg.status === "failed"
+                            ? "var(--danger-light)"
+                            : "var(--warning-light)",
+                        color:
+                          msg.status === "delivered"
+                            ? "var(--success-text)"
+                            : msg.status === "failed" || msg.status === "failed_balance"
+                            ? "var(--danger-text)"
+                            : "var(--warning-text)",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
@@ -1192,7 +1286,15 @@ export default function Home() {
                         marginTop: "2px",
                       }}
                     >
-                      {msg.status === "delivered" ? <CheckCircle2 size={22} /> : msg.status === "failed" ? <X size={22} /> : <Clock size={22} />}
+                      {msg.status === "delivered" ? (
+                        <CheckCircle2 size={22} />
+                      ) : msg.status === "failed_balance" ? (
+                        <AlertCircle size={22} />
+                      ) : msg.status === "failed" ? (
+                        <X size={22} />
+                      ) : (
+                        <Clock size={22} />
+                      )}
                     </div>
 
                     <div style={{ flex: 1 }}>
@@ -1241,15 +1343,20 @@ export default function Home() {
                           <CheckCircle2 size={12} />
                           مُسلّمة
                         </span>
+                      ) : msg.status === "failed_balance" ? (
+                        <span className="badge-fintech badge-failed" style={{ background: "rgba(239, 68, 68, 0.15)", color: "var(--danger-text)" }}>
+                          <AlertCircle size={12} />
+                          فشلت للرصيد
+                        </span>
                       ) : msg.status === "failed" ? (
                         <span className="badge-fintech badge-failed">
                           <X size={12} />
-                          فاشلة
+                          فاشلة عام
                         </span>
                       ) : (
                         <span className="badge-fintech badge-pending">
                           <Clock size={12} />
-                          انتظار
+                          قيد الانتظار
                         </span>
                       )}
                       {msg.status === "delivered" ? (

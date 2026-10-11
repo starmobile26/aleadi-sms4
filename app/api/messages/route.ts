@@ -140,7 +140,8 @@ export async function POST(request: Request) {
     });
 
     // تحديث مستند الإحصائيات ذرياً
-    await incrementStatsOnNewMessage(db, now);
+    const updatedStats = await incrementStatsOnNewMessage(db, now);
+    const successRate = updatedStats.total > 0 ? Math.round((updatedStats.delivered / updatedStats.total) * 100) : 0;
 
     const data: MessageType = {
       id: docRef.id,
@@ -156,8 +157,12 @@ export async function POST(request: Request) {
       pushMessageToReaders({ ...data, type: "NEW_MESSAGE" });
     }
     
-    // إشعار اللوحة بالرسالة الجديدة
-    pushUpdateToDashboards({ type: "NEW_MESSAGE", message: data });
+    // إشعار اللوحة بالرسالة الجديدة مع الإحصائيات المحدثة
+    pushUpdateToDashboards({
+      type: "NEW_MESSAGE",
+      message: data,
+      stats: { ...updatedStats, successRate },
+    });
 
     // =====================================================
     // نجاح

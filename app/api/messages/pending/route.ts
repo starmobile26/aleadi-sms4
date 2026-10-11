@@ -53,11 +53,16 @@ export async function GET() {
       // تحويل الرسائل التي انتظرت أكثر من 7 دقائق دون سحب إلى فاشلة
       if (data.status === "pending" && age >= SEVEN_MINUTES) {
         await doc.ref.update({ status: "failed" });
-        await updateStatsOnStatusChange(db, "pending", "failed", createdAt);
+        const updatedStats = await updateStatsOnStatusChange(db, "pending", "failed", createdAt);
+        const total = updatedStats.total;
+        const delivered = updatedStats.delivered;
+        const successRate = total > 0 ? Math.round((delivered / total) * 100) : 0;
+
         pushUpdateToDashboards({
           type: "MESSAGE_UPDATED",
           message: { id: doc.id, status: "failed" },
           oldStatus: "pending",
+          stats: { ...updatedStats, successRate },
         });
         continue;
       }
@@ -72,11 +77,16 @@ export async function GET() {
         deliveredAt,
       });
 
-      await updateStatsOnStatusChange(db, "pending", "delivered", createdAt);
+      const updatedStats = await updateStatsOnStatusChange(db, "pending", "delivered", createdAt);
+      const total = updatedStats.total;
+      const delivered = updatedStats.delivered;
+      const successRate = total > 0 ? Math.round((delivered / total) * 100) : 0;
+
       pushUpdateToDashboards({
         type: "MESSAGE_UPDATED",
         message: { id: doc.id, status: "delivered", deliveredAt },
         oldStatus: "pending",
+        stats: { ...updatedStats, successRate },
       });
 
       const message: Message = {

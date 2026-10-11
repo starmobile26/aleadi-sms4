@@ -68,9 +68,10 @@ export async function GET(request: Request) {
     if (hasUpdates) {
       await updateBatch.commit();
       for (const change of statusChanges) {
-        await updateStatsOnStatusChange(db, change.oldStatus, change.newStatus, change.createdAt);
-        statsData.pending = Math.max(0, statsData.pending - 1);
-        statsData.failed = statsData.failed + 1;
+        const updated = await updateStatsOnStatusChange(db, change.oldStatus, change.newStatus, change.createdAt);
+        statsData.pending = updated.pending;
+        statsData.failed = updated.failed;
+        statsData.daily = updated.daily;
       }
     }
 

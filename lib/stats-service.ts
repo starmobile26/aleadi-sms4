@@ -1,5 +1,3 @@
-import { FieldValue } from "firebase-admin/firestore";
-
 export type DailyStats = {
   total: number;
   delivered: number;
@@ -20,6 +18,19 @@ export type DashboardStats = {
 
 const SETTINGS_COLLECTION = "settings";
 const STATS_DOC_ID = "stats";
+
+/**
+ * تطبيع الحالات لضمان توافق جميع التسميات القادمة من أجهزة وقراءات الرسائل المختلفة
+ */
+export function normalizeStatus(status?: string | null): string {
+  if (!status) return "pending";
+  const s = String(status).trim().toLowerCase().replace("-", "_");
+  if (s === "sent" || s === "success" || s === "delivered") return "delivered";
+  if (s === "balance_failed" || s === "failed_balance" || s === "insufficient_balance") return "failed_balance";
+  if (s === "failed" || s === "error" || s === "fail") return "failed";
+  if (s === "pending" || s === "wait" || s === "waiting") return "pending";
+  return s;
+}
 
 /**
  * جلب الإحصائيات الشاملة من ملف الإحصائيات المخصص (مستند واحد = قراءة واحدة فقط في فايربيس)
@@ -61,7 +72,7 @@ export async function recalculateAndSaveStats(db: FirebaseFirestore.Firestore): 
 
   snapshot.docs.forEach((doc) => {
     const data = doc.data();
-    const status = data.status || "pending";
+    const status = normalizeStatus(data.status || "pending");
     const createdAt = Number(data.createdAt || Date.now());
     const dateKey = new Date(createdAt).toISOString().split("T")[0];
 
@@ -96,70 +107,149 @@ export async function recalculateAndSaveStats(db: FirebaseFirestore.Firestore): 
     updatedAt: Date.now(),
   };
 
-  await db.collection(SETTINGS_COLLECTION).doc(STATS_DOC_ID).set(stats, { merge: true });
+  await db.collection(SETTINGS_COLLECTION).doc(STATS_DOC_ID).set(stats);
 
   return stats;
 }
 
 /**
- * تحديث الإحصائيات عند إنشاء رسالة جديدة (زيادة العدادات ذرياً)
+ * تحديث الإحصائيات عند إنشاء رسالة جديدة (زيادة العدادات بأمان ذري عبر transaction لتجنب أخطاء dot notation)
  */
 export async function incrementStatsOnNewMessage(
   db: FirebaseFirestore.Firestore,
   createdAt: number
-): Promise<void> {
+): Promise<DashboardStats> {
   const dateKey = new Date(createdAt).toISOString().split("T")[0];
   const statsRef = db.collection(SETTINGS_COLLECTION).doc(STATS_DOC_ID);
 
-  await statsRef.set(
-    {
-      total: FieldValue.increment(1),
-      pending: FieldValue.increment(1),
-      [`daily.${dateKey}.total`]: FieldValue.increment(1),
-      [`daily.${dateKey}.pending`]: FieldValue.increment(1),
+  return await db.runTransaction(async (transaction) => {
+    const docSnap = await transaction.get(statsRef);
+    let total = 1;
+    let pending = 1;
+    let delivered = 0;
+    let failed = 0;
+    let failedBalance = 0;
+    let daily: Record<string, DailyStats> = {};
+
+    if (docSnap.exists) {
+      const data = docSnap.data();
+      total = Math.max(0, Number(data?.total ?? 0)) + 1;
+      pending = Math.max(0, Number(data?.pending ?? 0)) + 1;
+      delivered = Math.max(0, Number(data?.delivered ?? 0));
+      failed = Math.max(0, Number(data?.failed ?? 0));
+      failedBalance = Math.max(0, Number(data?.failedBalance ?? 0));
+      daily = (data?.daily as Record<string, DailyStats>) || {};
+    }
+
+    const currentDay = daily[dateKey] || { total: 0, delivered: 0, pending: 0, failed: 0, failedBalance: 0 };
+    daily[dateKey] = {
+      total: (currentDay.total || 0) + 1,
+      pending: (currentDay.pending || 0) + 1,
+      delivered: currentDay.delivered || 0,
+      failed: currentDay.failed || 0,
+      failedBalance: currentDay.failedBalance || 0,
+    };
+
+    const stats: DashboardStats = {
+      total,
+      pending,
+      delivered,
+      failed,
+      failedBalance,
+      daily,
       updatedAt: createdAt,
-    },
-    { merge: true }
-  );
+    };
+
+    transaction.set(statsRef, stats);
+    return stats;
+  });
 }
 
 /**
- * تحديث الإحصائيات عند تغير حالة رسالة (مثلاً: من معلقة إلى مستلمة أو فاشلة)
+ * تحديث الإحصائيات عند تغير حالة رسالة (تخفيض قيد الانتظار وزيادة تم التسليم أو فاشلة أو فاشلة للرصيد)
+ * يعمل ذرياً بدون تداخل أو تعارض مسارات في فايربيس
  */
 export async function updateStatsOnStatusChange(
   db: FirebaseFirestore.Firestore,
-  oldStatus: string,
-  newStatus: string,
+  rawOldStatus: string,
+  rawNewStatus: string,
   createdAt: number
-): Promise<void> {
-  if (oldStatus === newStatus) return;
+): Promise<DashboardStats> {
+  const oldStatus = normalizeStatus(rawOldStatus);
+  const newStatus = normalizeStatus(rawNewStatus);
+
+  if (oldStatus === newStatus) {
+    return await getOrInitStats(db);
+  }
 
   const dateKey = new Date(createdAt).toISOString().split("T")[0];
   const statsRef = db.collection(SETTINGS_COLLECTION).doc(STATS_DOC_ID);
 
-  const statusFieldMap: Record<string, string> = {
-    pending: "pending",
-    delivered: "delivered",
-    failed: "failed",
-    failed_balance: "failedBalance",
-  };
+  return await db.runTransaction(async (transaction) => {
+    const docSnap = await transaction.get(statsRef);
+    if (!docSnap.exists) {
+      return await recalculateAndSaveStats(db);
+    }
 
-  const oldField = statusFieldMap[oldStatus];
-  const newField = statusFieldMap[newStatus];
+    const data = docSnap.data();
+    let total = Math.max(0, Number(data?.total ?? 0));
+    let pending = Math.max(0, Number(data?.pending ?? 0));
+    let delivered = Math.max(0, Number(data?.delivered ?? 0));
+    let failed = Math.max(0, Number(data?.failed ?? 0));
+    let failedBalance = Math.max(0, Number(data?.failedBalance ?? 0));
+    const daily: Record<string, DailyStats> = (data?.daily as Record<string, DailyStats>) || {};
 
-  const updates: Record<string, any> = {
-    updatedAt: Date.now(),
-  };
+    const currentDay = {
+      total: daily[dateKey]?.total ?? 0,
+      delivered: daily[dateKey]?.delivered ?? 0,
+      pending: daily[dateKey]?.pending ?? 0,
+      failed: daily[dateKey]?.failed ?? 0,
+      failedBalance: daily[dateKey]?.failedBalance ?? 0,
+    };
 
-  if (oldField) {
-    updates[oldField] = FieldValue.increment(-1);
-    updates[`daily.${dateKey}.${oldField}`] = FieldValue.increment(-1);
-  }
+    // 1. خصم الحالة القديمة
+    if (oldStatus === "pending") {
+      pending = Math.max(0, pending - 1);
+      currentDay.pending = Math.max(0, currentDay.pending - 1);
+    } else if (oldStatus === "delivered") {
+      delivered = Math.max(0, delivered - 1);
+      currentDay.delivered = Math.max(0, currentDay.delivered - 1);
+    } else if (oldStatus === "failed") {
+      failed = Math.max(0, failed - 1);
+      currentDay.failed = Math.max(0, currentDay.failed - 1);
+    } else if (oldStatus === "failed_balance") {
+      failedBalance = Math.max(0, failedBalance - 1);
+      currentDay.failedBalance = Math.max(0, currentDay.failedBalance - 1);
+    }
 
-  if (newField) {
-    updates[newField] = FieldValue.increment(1);
-    updates[`daily.${dateKey}.${newField}`] = FieldValue.increment(1);
-  }
+    // 2. إضافة الحالة الجديدة
+    if (newStatus === "pending") {
+      pending++;
+      currentDay.pending++;
+    } else if (newStatus === "delivered") {
+      delivered++;
+      currentDay.delivered++;
+    } else if (newStatus === "failed") {
+      failed++;
+      currentDay.failed++;
+    } else if (newStatus === "failed_balance") {
+      failedBalance++;
+      currentDay.failedBalance++;
+    }
 
-  await statsRef.set(updates, { merge: true });
+    daily[dateKey] = currentDay;
+
+    const stats: DashboardStats = {
+      total,
+      pending,
+      delivered,
+      failed,
+      failedBalance,
+      daily,
+      updatedAt: Date.now(),
+    };
+
+    transaction.set(statsRef, stats);
+    return stats;
+  });
 }
