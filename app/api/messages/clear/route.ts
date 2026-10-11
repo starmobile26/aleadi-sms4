@@ -25,6 +25,17 @@ export async function DELETE(request: Request) {
       if (snapshot.size < BATCH_SIZE) break;
     }
 
+    // تصفير ملف الإحصائيات عند حذف جميع الرسائل
+    await db.collection("settings").doc("stats").set({
+      total: 0,
+      pending: 0,
+      delivered: 0,
+      failed: 0,
+      failedBalance: 0,
+      daily: {},
+      updatedAt: Date.now(),
+    });
+
     return NextResponse.json({ success: true, deleted });
   } catch (error) {
     console.error("CLEAR MESSAGES ERROR:", error);

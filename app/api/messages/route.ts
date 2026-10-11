@@ -1,5 +1,6 @@
 import { getDb } from "@/lib/firebase-admin";
 import { isReaderConnected, pushMessageToReaders, pushUpdateToDashboards, MessageType, isMaintenanceMode } from "@/lib/server-state";
+import { incrementStatsOnNewMessage } from "@/lib/stats-service";
 import { NextResponse } from "next/server";
 
 // مفتاح API المسموح للمرسل
@@ -137,6 +138,9 @@ export async function POST(request: Request) {
       status,
       deliveredAt,
     });
+
+    // تحديث مستند الإحصائيات ذرياً
+    await incrementStatsOnNewMessage(db, now);
 
     const data: MessageType = {
       id: docRef.id,

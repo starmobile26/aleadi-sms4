@@ -25,7 +25,7 @@ const globalForState = globalThis as unknown as {
 export const serverState: ServerState = globalForState.__smsServerState || {
   readerStreams: new Set(),
   dashboardStreams: new Set(),
-  lastCleanupTime: 0,
+  lastCleanupTime: Date.now(),
 };
 
 import { getDb } from "./firebase-admin";

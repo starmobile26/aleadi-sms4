@@ -339,9 +339,17 @@ export default function Home() {
             if (!prev) return prev;
             const message = payload.message as Message;
             if (prev.messages.some((item) => item.id === message.id)) return prev;
+            const newTotal = prev.stats.total + 1;
+            const newPending = prev.stats.pending + 1;
             return {
               ...prev,
-              messages: [message, ...prev.messages].slice(0, 100),
+              messages: [message, ...prev.messages].slice(0, 10),
+              stats: {
+                ...prev.stats,
+                total: newTotal,
+                pending: newPending,
+                successRate: newTotal > 0 ? Math.round((prev.stats.delivered / newTotal) * 100) : 0,
+              },
             };
           });
         } else if (payload.type === "MESSAGE_UPDATED" && payload.message) {
@@ -350,7 +358,45 @@ export default function Home() {
             const msgs = prev.messages.map((m) =>
               m.id === payload.message.id ? { ...m, status: payload.message.status, deliveredAt: payload.message.deliveredAt } : m
             );
-            return { ...prev, messages: msgs };
+            const existingMsg = prev.messages.find((m) => m.id === payload.message.id);
+            const oldStatus = payload.oldStatus || existingMsg?.status || "pending";
+            const newStatus = payload.message.status;
+
+            let pendingDiff = 0;
+            let deliveredDiff = 0;
+            let failedDiff = 0;
+            let failedBalanceDiff = 0;
+
+            if (oldStatus !== newStatus) {
+              if (oldStatus === "pending") pendingDiff--;
+              else if (oldStatus === "delivered") deliveredDiff--;
+              else if (oldStatus === "failed") failedDiff--;
+              else if (oldStatus === "failed_balance") failedBalanceDiff--;
+
+              if (newStatus === "pending") pendingDiff++;
+              else if (newStatus === "delivered") deliveredDiff++;
+              else if (newStatus === "failed") failedDiff++;
+              else if (newStatus === "failed_balance") failedBalanceDiff++;
+            }
+
+            const newPending = Math.max(0, prev.stats.pending + pendingDiff);
+            const newDelivered = Math.max(0, prev.stats.delivered + deliveredDiff);
+            const newFailed = Math.max(0, prev.stats.failed + failedDiff);
+            const newFailedBalance = Math.max(0, prev.stats.failedBalance + failedBalanceDiff);
+            const total = prev.stats.total;
+
+            return {
+              ...prev,
+              messages: msgs,
+              stats: {
+                ...prev.stats,
+                pending: newPending,
+                delivered: newDelivered,
+                failed: newFailed,
+                failedBalance: newFailedBalance,
+                successRate: total > 0 ? Math.round((newDelivered / total) * 100) : 0,
+              },
+            };
           });
         } else if (payload.type === "MAINTENANCE_STATUS") {
           setMaintenanceMode(payload.maintenanceMode);
@@ -846,7 +892,7 @@ export default function Home() {
             </div>
           </div>
           <div className="num-latin stat-val" style={{ fontSize: "1.9rem", fontWeight: 800, color: "var(--danger-text)", lineHeight: 1 }}>
-            {loading ? "?" : stats.failedBalance}
+            {loading ? "—" : stats.failedBalance}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "4px", color: "var(--text-muted)", fontSize: "0.78rem", marginTop: "8px", fontWeight: 500 }}>
             <span>فشلت بسبب الرصيد</span>
@@ -994,7 +1040,7 @@ export default function Home() {
               سجل الرسائل والعمليات
             </h3>
             <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", marginTop: "2px", fontWeight: 500 }}>
-              عرض حي لجميع رسائل OTP والتنبيهات الممررة عبر المنظومة
+              عرض آخر 10 رسائل مباشرة (توفيراً لاستهلاك قراءات فايربيس)
             </p>
           </div>
 

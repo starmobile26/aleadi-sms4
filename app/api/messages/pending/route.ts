@@ -1,9 +1,10 @@
 import { getDb } from "@/lib/firebase-admin";
 import { NextResponse } from "next/server";
+import { updateStatsOnStatusChange } from "@/lib/stats-service";
+import { pushUpdateToDashboards } from "@/lib/server-state";
 
 const ONE_MONTH_MS = 30 * 24 * 60 * 60 * 1000;
 const SEVEN_MINUTES = 7 * 60 * 1000;
-const FALLBACK_CHECK_INTERVAL = 60 * 1000; // التحقق من الداتابيز كل دقيقة كحد أقصى عند الخمول
 
 type Message = {
   id: string;
@@ -13,9 +14,6 @@ type Message = {
   status: string;
   deliveredAt?: number;
 };
-
-// تخزين آخر وقت كتابة للنبض في Firestore لتوفير عمليات الكتابة (مرة كل 5 دقائق فقط بدلاً من كل 3 ثوانٍ)
-let lastFirestoreHeartbeatWrite = 0;
 
 export async function GET() {
   try {
@@ -43,7 +41,8 @@ export async function GET() {
     // البحث عن رسالة صالحة (لم تنتهِ مدتها)
     for (const doc of snapshot.docs) {
       const data = doc.data();
-      const age = now - data.createdAt;
+      const createdAt = Number(data.createdAt || now);
+      const age = now - createdAt;
 
       // حذف الرسائل القديمة جداً (أكثر من شهر)
       if (age >= ONE_MONTH_MS) {
@@ -54,6 +53,12 @@ export async function GET() {
       // تحويل الرسائل التي انتظرت أكثر من 7 دقائق دون سحب إلى فاشلة
       if (data.status === "pending" && age >= SEVEN_MINUTES) {
         await doc.ref.update({ status: "failed" });
+        await updateStatsOnStatusChange(db, "pending", "failed", createdAt);
+        pushUpdateToDashboards({
+          type: "MESSAGE_UPDATED",
+          message: { id: doc.id, status: "failed" },
+          oldStatus: "pending",
+        });
         continue;
       }
 
@@ -67,11 +72,18 @@ export async function GET() {
         deliveredAt,
       });
 
+      await updateStatsOnStatusChange(db, "pending", "delivered", createdAt);
+      pushUpdateToDashboards({
+        type: "MESSAGE_UPDATED",
+        message: { id: doc.id, status: "delivered", deliveredAt },
+        oldStatus: "pending",
+      });
+
       const message: Message = {
         id: doc.id,
         phone: data.phone,
         message: data.message,
-        createdAt: data.createdAt,
+        createdAt,
         status: "delivered",
         deliveredAt,
       };
