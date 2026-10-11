@@ -76,49 +76,6 @@ export async function GET(request: Request) {
     }
 
     // =====================================================
-    // 3.5. التحقق والتصحيح الذاتي التلقائي (Self-Healing) بدون أي قراءات إضافية (0 Reads)
-    // =====================================================
-    if (snapshot.size < 10) {
-      // عدد الرسائل الإجمالي في القاعدة أقل من 10، فالمجموعة الحالية تحوي كل الرسائل!
-      let actualPending = 0;
-      let actualDelivered = 0;
-      let actualFailed = 0;
-      let actualFailedBalance = 0;
-
-      messages.forEach((m) => {
-        if (m.status === "delivered") actualDelivered++;
-        else if (m.status === "failed_balance") actualFailedBalance++;
-        else if (m.status === "failed") actualFailed++;
-        else actualPending++;
-      });
-
-      if (
-        statsData.total !== snapshot.size ||
-        statsData.pending !== actualPending ||
-        statsData.delivered !== actualDelivered ||
-        statsData.failed !== actualFailed ||
-        statsData.failedBalance !== actualFailedBalance
-      ) {
-        statsData.total = snapshot.size;
-        statsData.pending = actualPending;
-        statsData.delivered = actualDelivered;
-        statsData.failed = actualFailed;
-        statsData.failedBalance = actualFailedBalance;
-        db.collection("settings").doc("stats").set(statsData, { merge: true }).catch(console.error);
-      }
-    } else {
-      // إذا كانت آخر 10 رسائل كلها خالية من أي pending ومضى عليها أكثر من 7 دقائق
-      const pendingInLast10 = messages.filter((m) => m.status === "pending").length;
-      const oldestMsgInLast10 = messages[messages.length - 1];
-      if (pendingInLast10 === 0 && oldestMsgInLast10 && now - oldestMsgInLast10.createdAt > 7 * 60 * 1000) {
-        if (statsData.pending > 0) {
-          statsData.pending = 0;
-          db.collection("settings").doc("stats").update({ pending: 0 }).catch(console.error);
-        }
-      }
-    }
-
-    // =====================================================
     // 4. تجهيز بيانات الرسم البياني من مستند الإحصائيات (0 قراءات إضافية)
     // =====================================================
     const dailyStats: Record<string, { total: number; delivered: number; pending: number; failed: number; failedBalance: number }> = {};

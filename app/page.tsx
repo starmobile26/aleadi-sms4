@@ -460,24 +460,9 @@ export default function Home() {
     eventSource.onerror = (e) => {
       console.error("SSE Connection Error", e);
     };
-
-    // مزامنة صامتة تلقائية عند العودة للتبويب
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        loadMessages(true);
-      }
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    // تحديث صامت دوري كل 12 ثانية لضمان دقة الأرقام التلقائية دائماً
-    const autoInterval = setInterval(() => {
-      loadMessages(true);
-    }, 12000);
     
     return () => {
       eventSource.close();
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      clearInterval(autoInterval);
     };
   }, [loggedIn, loadMessages]);
 
